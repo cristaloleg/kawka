@@ -5,9 +5,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 
 	kafka "github.com/Shopify/sarama"
-	"github.com/gobwas/ws"
+	websocket "github.com/gobwas/ws"
 )
 
 // MessageHandler ...
@@ -15,10 +16,11 @@ type MessageHandler func(data []byte) (topic string, content interface{}, err er
 
 // Kawka ...
 type Kawka struct {
+	port     int
 	producer kafka.SyncProducer
-
-	handler MessageHandler
-	stream  chan []byte
+	brokers  []string
+	handler  MessageHandler
+	stream   chan []byte
 }
 
 // Message ...
@@ -29,15 +31,20 @@ type Message struct {
 }
 
 // New ...
-func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
-	p, err := newSyncProducer(brokers)
-	if err != nil {
-		panic(err)
-	}
+func New(opts ...Option) *Kawka {
 	wk := &Kawka{
-		producer: p,
-		handler:  handler,
-		stream:   make(chan []byte),
+		handler: defaultMessageHandler,
+		stream:  make(chan []byte),
+	}
+
+	for _, op := range opts {
+		if err := op(wk); err != nil {
+			panic(err)
+		}
+	}
+
+	if err := wk.initProducer(wk.brokers); err != nil {
+		panic(err)
 	}
 
 	if wk.handler == nil {
@@ -48,7 +55,7 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 
 // Start ...
 func (wk *Kawka) Start() error {
-	ln, err := net.Listen("tcp", "localhost:5985")
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(wk.port))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -58,7 +65,7 @@ func (wk *Kawka) Start() error {
 		if err != nil {
 			// handle error
 		}
-		_, err = ws.Upgrade(conn)
+		_, err = websocket.Upgrade(conn)
 		if err != nil {
 			// handle error
 		}
@@ -67,7 +74,7 @@ func (wk *Kawka) Start() error {
 			defer conn.Close()
 
 			for {
-				header, err := ws.ReadHeader(conn)
+				header, err := websocket.ReadHeader(conn)
 				if err != nil {
 					// handle error
 				}
@@ -79,7 +86,7 @@ func (wk *Kawka) Start() error {
 					// handle error
 				}
 				if header.Masked {
-					ws.Cipher(payload, header.Mask, 0)
+					websocket.Cipher(payload, header.Mask, 0)
 				}
 
 				topic, content, err := wk.handler(payload)
@@ -101,25 +108,28 @@ func (wk *Kawka) Start() error {
 			}
 		}()
 	}
-	return nil
 }
 
 // Stop will stop Kawka processing data from websockets.
 func (wk *Kawka) Stop() error {
+	if err := wk.producer.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 
-func newSyncProducer(brokers []string) (kafka.SyncProducer, error) {
+func (wk *Kawka) initProducer(brokers []string) error {
 	config := kafka.NewConfig()
 	config.ChannelBufferSize = 1
 	config.Version = kafka.V0_10_0_1
 	config.Producer.Return.Successes = true
 
-	producer, err := kafka.NewSyncProducer(brokers, config)
+	var err error
+	wk.producer, err = kafka.NewSyncProducer(brokers, config)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return producer, nil
+	return nil
 }
 
 func defaultMessageHandler(data []byte) (topic string, content interface{}, err error) {

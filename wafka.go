@@ -12,14 +12,13 @@ import (
 // MessageHandler ...
 type MessageHandler func(data []byte) (topic string, content interface{}, err error)
 
-type dataHandler func(data []byte) error
-
 // Kawka ...
 type Kawka struct {
 	producer   kafka.SyncProducer
 	hub        *wsHub
 	wsUpgrader websocket.Upgrader
 	handler    MessageHandler
+	stream     chan []byte
 }
 
 // Message ...
@@ -40,6 +39,7 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 		hub:        newHub(),
 		wsUpgrader: websocket.Upgrader{},
 		handler:    handler,
+		stream:     make(chan []byte),
 	}
 
 	if wk.handler == nil {
@@ -50,6 +50,29 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 
 // Start ...
 func (wk *Kawka) Start() error {
+	go func() {
+		for {
+			data := <-wk.stream
+
+			topic, content, err := wk.handler(data)
+			if err != nil {
+				log.Printf("error on SendMessage: %s\n", err.Error())
+				continue
+			}
+
+			msg := &kafka.ProducerMessage{
+				Topic: topic,
+				Value: kafka.StringEncoder(content.(string)),
+			}
+
+			_, _, err = wk.producer.SendMessage(msg)
+			if err != nil {
+				log.Printf("error on SendMessage: %s\n", err.Error())
+				continue
+			}
+		}
+	}()
+
 	http.HandleFunc("/ws", wk.wsHandler)
 
 	return http.ListenAndServe(":5987", nil)
@@ -57,27 +80,6 @@ func (wk *Kawka) Start() error {
 
 // Stop will stop Kawka processing data from websockets.
 func (wk *Kawka) Stop() error {
-	return nil
-}
-
-func (wk *Kawka) process(data []byte) error {
-	topic, content, err := wk.handler(data)
-	if err != nil {
-		log.Printf("error on SendMessage: %s\n", err.Error())
-		return err
-	}
-
-	msg := &kafka.ProducerMessage{
-		Topic: topic,
-		Value: kafka.StringEncoder(content.(string)),
-	}
-
-	_, _, err = wk.producer.SendMessage(msg)
-
-	if err != nil {
-		log.Printf("error on SendMessage: %s\n", err.Error())
-		return err
-	}
 	return nil
 }
 
@@ -110,7 +112,7 @@ func (wk *Kawka) wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := newWsClient(conn, wk.hub, wk.process)
+	client := newWsClient(conn, wk.hub, wk.stream)
 
 	wk.hub.Connect(client)
 

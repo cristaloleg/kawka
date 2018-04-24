@@ -14,16 +14,16 @@ const (
 )
 
 type wsClient struct {
-	hub     *wsHub
-	conn    *websocket.Conn
-	process dataHandler
+	hub    *wsHub
+	conn   *websocket.Conn
+	stream chan<- []byte
 }
 
-func newWsClient(conn *websocket.Conn, hub *wsHub, process dataHandler) *wsClient {
+func newWsClient(conn *websocket.Conn, hub *wsHub, stream chan<- []byte) *wsClient {
 	client := &wsClient{
-		conn:    conn,
-		hub:     hub,
-		process: process,
+		conn:   conn,
+		hub:    hub,
+		stream: stream,
 	}
 	return client
 }
@@ -51,7 +51,7 @@ func (c *wsClient) readPump() {
 		switch msgType {
 		case websocket.TextMessage:
 			msg = bytes.TrimSpace(bytes.Replace(msg, []byte{'\n'}, []byte{' '}, -1))
-			c.process(msg)
+			c.stream <- msg
 
 		case websocket.BinaryMessage:
 		case websocket.CloseMessage:

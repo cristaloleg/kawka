@@ -2,11 +2,12 @@ package kawka
 
 import (
 	"encoding/json"
+	"io"
 	"log"
-	"net/http"
+	"net"
 
 	kafka "github.com/Shopify/sarama"
-	"github.com/gorilla/websocket"
+	"github.com/gobwas/ws"
 )
 
 // MessageHandler ...
@@ -14,10 +15,10 @@ type MessageHandler func(data []byte) (topic string, content interface{}, err er
 
 // Kawka ...
 type Kawka struct {
-	producer   kafka.SyncProducer
-	wsUpgrader websocket.Upgrader
-	handler    MessageHandler
-	stream     chan []byte
+	producer kafka.SyncProducer
+
+	handler MessageHandler
+	stream  chan []byte
 }
 
 // Message ...
@@ -34,10 +35,9 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 		panic(err)
 	}
 	wk := &Kawka{
-		producer:   p,
-		wsUpgrader: websocket.Upgrader{},
-		handler:    handler,
-		stream:     make(chan []byte),
+		producer: p,
+		handler:  handler,
+		stream:   make(chan []byte),
 	}
 
 	if wk.handler == nil {
@@ -48,32 +48,60 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 
 // Start ...
 func (wk *Kawka) Start() error {
-	go func() {
-		for {
-			data := <-wk.stream
+	ln, err := net.Listen("tcp", "localhost:5985")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-			topic, content, err := wk.handler(data)
-			if err != nil {
-				log.Printf("error on SendMessage: %s\n", err.Error())
-				continue
-			}
-
-			msg := &kafka.ProducerMessage{
-				Topic: topic,
-				Value: kafka.StringEncoder(content.(string)),
-			}
-
-			_, _, err = wk.producer.SendMessage(msg)
-			if err != nil {
-				log.Printf("error on SendMessage: %s\n", err.Error())
-				continue
-			}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			// handle error
 		}
-	}()
+		_, err = ws.Upgrade(conn)
+		if err != nil {
+			// handle error
+		}
 
-	http.HandleFunc("/ws", wk.wsHandler)
+		go func() {
+			defer conn.Close()
 
-	return http.ListenAndServe(":5987", nil)
+			for {
+				header, err := ws.ReadHeader(conn)
+				if err != nil {
+					// handle error
+				}
+
+				// TODO: use pool
+				payload := make([]byte, header.Length)
+				_, err = io.ReadFull(conn, payload)
+				if err != nil {
+					// handle error
+				}
+				if header.Masked {
+					ws.Cipher(payload, header.Mask, 0)
+				}
+
+				topic, content, err := wk.handler(payload)
+				if err != nil {
+					log.Printf("error on SendMessage: %s\n", err.Error())
+					continue
+				}
+
+				msg := &kafka.ProducerMessage{
+					Topic: topic,
+					Value: kafka.StringEncoder(content.(string)),
+				}
+
+				_, _, err = wk.producer.SendMessage(msg)
+				if err != nil {
+					log.Printf("error on SendMessage: %s\n", err.Error())
+					continue
+				}
+			}
+		}()
+	}
+	return nil
 }
 
 // Stop will stop Kawka processing data from websockets.
@@ -100,17 +128,4 @@ func defaultMessageHandler(data []byte) (topic string, content interface{}, err 
 		return "", nil, err
 	}
 	return msg.Type, msg, nil
-}
-
-func (wk *Kawka) wsHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := wk.wsUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		w.Write([]byte(err.Error()))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	client := newWsClient(conn, wk.stream)
-
-	go client.readPump()
 }

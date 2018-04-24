@@ -11,6 +11,14 @@ func WithBrokers(brokers []string) Option {
 	}
 }
 
+// WithHandler ...
+func WithHandler(handler MessageHandler) Option {
+	return func(wk *Kawka) error {
+		wk.handler = handler
+		return nil
+	}
+}
+
 // WithPort ...
 func WithPort(port int) Option {
 	return func(wk *Kawka) error {

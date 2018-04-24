@@ -1,11 +1,9 @@
 package kawka
 
 import (
-	"bytes"
 	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 
 	kafka "github.com/Shopify/sarama"
 	"github.com/gorilla/websocket"
@@ -146,58 +144,4 @@ func (wk *Kawka) wsHandler(w http.ResponseWriter, r *http.Request) {
 	wk.hub.Connect(client)
 
 	go client.readPump()
-}
-
-const (
-	pongWait       = 60 * time.Second
-	maxMessageSize = 512
-)
-
-type wsClient struct {
-	hub     *wsHub
-	conn    *websocket.Conn
-	process dataHandler
-}
-
-func newWsClient(conn *websocket.Conn, hub *wsHub, process dataHandler) *wsClient {
-	client := &wsClient{
-		conn:    conn,
-		hub:     hub,
-		process: process,
-	}
-	return client
-}
-
-func (c *wsClient) readPump() {
-	defer func() {
-		c.hub.Disconnect(c)
-		c.conn.Close()
-	}()
-
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-
-	for {
-		msgType, msg, err := c.conn.ReadMessage()
-		if err != nil {
-			log.Printf("error: %v", err)
-			break
-		}
-
-		switch msgType {
-		case websocket.TextMessage:
-			msg = bytes.TrimSpace(bytes.Replace(msg, []byte{'\n'}, []byte{' '}, -1))
-			c.process(msg)
-
-		case websocket.BinaryMessage:
-		case websocket.CloseMessage:
-		case websocket.PingMessage:
-		case websocket.PongMessage:
-		default:
-		}
-	}
 }

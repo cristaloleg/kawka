@@ -15,7 +15,6 @@ type MessageHandler func(data []byte) (topic string, content interface{}, err er
 // Kawka ...
 type Kawka struct {
 	producer   kafka.SyncProducer
-	hub        *wsHub
 	wsUpgrader websocket.Upgrader
 	handler    MessageHandler
 	stream     chan []byte
@@ -36,7 +35,6 @@ func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
 	}
 	wk := &Kawka{
 		producer:   p,
-		hub:        newHub(),
 		wsUpgrader: websocket.Upgrader{},
 		handler:    handler,
 		stream:     make(chan []byte),
@@ -112,9 +110,7 @@ func (wk *Kawka) wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := newWsClient(conn, wk.hub, wk.stream)
-
-	wk.hub.Connect(client)
+	client := newWsClient(conn, wk.stream)
 
 	go client.readPump()
 }

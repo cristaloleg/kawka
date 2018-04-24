@@ -14,15 +14,13 @@ const (
 )
 
 type wsClient struct {
-	hub    *wsHub
 	conn   *websocket.Conn
 	stream chan<- []byte
 }
 
-func newWsClient(conn *websocket.Conn, hub *wsHub, stream chan<- []byte) *wsClient {
+func newWsClient(conn *websocket.Conn, stream chan<- []byte) *wsClient {
 	client := &wsClient{
 		conn:   conn,
-		hub:    hub,
 		stream: stream,
 	}
 	return client
@@ -30,7 +28,6 @@ func newWsClient(conn *websocket.Conn, hub *wsHub, stream chan<- []byte) *wsClie
 
 func (c *wsClient) readPump() {
 	defer func() {
-		c.hub.Disconnect(c)
 		c.conn.Close()
 	}()
 

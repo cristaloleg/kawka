@@ -17,11 +17,9 @@ type dataHandler func(data []byte) error
 // Kawka ...
 type Kawka struct {
 	producer   kafka.SyncProducer
-	aproducer  kafka.AsyncProducer
 	hub        *wsHub
 	wsUpgrader websocket.Upgrader
 	handler    MessageHandler
-	isAsync    bool
 }
 
 // Message ...
@@ -33,24 +31,15 @@ type Message struct {
 
 // New ...
 func New(brokers []string, handler MessageHandler, opts ...interface{}) *Kawka {
+	p, err := newSyncProducer(brokers)
+	if err != nil {
+		panic(err)
+	}
 	wk := &Kawka{
+		producer:   p,
 		hub:        newHub(),
 		wsUpgrader: websocket.Upgrader{},
 		handler:    handler,
-	}
-
-	if wk.isAsync {
-		p, err := newAsyncProducer(brokers)
-		if err != nil {
-			panic(err)
-		}
-		wk.aproducer = p
-	} else {
-		p, err := newSyncProducer(brokers)
-		if err != nil {
-			panic(err)
-		}
-		wk.producer = p
 	}
 
 	if wk.handler == nil {
@@ -83,12 +72,7 @@ func (wk *Kawka) process(data []byte) error {
 		Value: kafka.StringEncoder(content.(string)),
 	}
 
-	if wk.isAsync {
-		wk.aproducer.Input() <- msg
-		<-wk.aproducer.Successes()
-	} else {
-		_, _, err = wk.producer.SendMessage(msg)
-	}
+	_, _, err = wk.producer.SendMessage(msg)
 
 	if err != nil {
 		log.Printf("error on SendMessage: %s\n", err.Error())
@@ -104,19 +88,6 @@ func newSyncProducer(brokers []string) (kafka.SyncProducer, error) {
 	config.Producer.Return.Successes = true
 
 	producer, err := kafka.NewSyncProducer(brokers, config)
-	if err != nil {
-		return nil, err
-	}
-	return producer, nil
-}
-
-func newAsyncProducer(brokers []string) (kafka.AsyncProducer, error) {
-	config := kafka.NewConfig()
-	config.ChannelBufferSize = 1
-	config.Version = kafka.V0_10_0_1
-	config.Producer.Return.Successes = true
-
-	producer, err := kafka.NewAsyncProducer(brokers, config)
 	if err != nil {
 		return nil, err
 	}
